@@ -724,6 +724,67 @@ fn rar4_unicode_names_child() {
     }
 }
 
+/// Each `ArchiveIterator` holds a locale guard for its whole life, so two of
+/// them on one thread may drop their guards in either order.
+#[cfg(unix)]
+#[test]
+fn iterators_dropped_in_any_order_restore_the_locale() {
+    run_ignored_test_in_child("iterators_dropped_in_any_order_child");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "run by iterators_dropped_in_any_order_restore_the_locale under the C locale"]
+fn iterators_dropped_in_any_order_child() {
+    let path = "tests/fixtures/rar4-unicode-names.rar";
+    let current_locale = || unsafe { libc::uselocale(std::ptr::null_mut()) };
+    let before = current_locale();
+
+    for order in ["creation", "reverse"] {
+        let first = ArchiveIterator::from_read(std::fs::File::open(path).unwrap())
+            .expect("Failed to read archive");
+        let second = ArchiveIterator::from_read(std::fs::File::open(path).unwrap())
+            .expect("Failed to read archive");
+        let (dropped, kept) = if order == "creation" {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        drop(dropped);
+
+        let names: Vec<String> = kept
+            .filter_map(|content| match content {
+                ArchiveContents::StartOfEntry(name, _) => Some(name),
+                ArchiveContents::Err(e) => panic!("dropped in {} order: {:?}", order, e),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, RAR4_UNICODE_NAMES, "dropped in {} order", order);
+
+        assert_eq!(
+            current_locale(),
+            before,
+            "dropped in {} order, the thread was left in another locale",
+            order
+        );
+
+        let files = list_archive_files(std::fs::File::open(path).unwrap())
+            .expect("Failed to list the archive");
+        assert_eq!(
+            files, RAR4_UNICODE_NAMES,
+            "after dropping in {} order",
+            order
+        );
+        let names =
+            collect_iterate_names_with_encoding(std::fs::File::open(path).unwrap(), decode_utf8);
+        assert_eq!(
+            names, RAR4_UNICODE_NAMES,
+            "after dropping in {} order",
+            order
+        );
+    }
+}
+
 /// Counts the bytes read through it.
 struct CountingReader<R> {
     inner: R,

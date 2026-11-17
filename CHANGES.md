@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+* Fix a use-after-free in the locale guard: two `ArchiveIterator`s on one
+  thread dropped in creation order left the thread using a freed locale. The
+  UTF-8 locale is now made once per process, and a thread's own locale is
+  restored when the last guard on it is dropped
 * Register a skip callback, so libarchive seeks over the data of an entry it
   skips instead of reading it: `uncompress_archive_file` and a filtered
   `ArchiveIterator` no longer read every entry before the one wanted when
