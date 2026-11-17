@@ -547,6 +547,11 @@ where
                 archive_reader,
             )?;
 
+            archive_result(
+                ffi::archive_read_set_skip_callback(archive_reader, Some(libarchive_skip_callback)),
+                archive_reader,
+            )?;
+
             let mut writer_flags = ffi::ARCHIVE_EXTRACT_TIME
                 | ffi::ARCHIVE_EXTRACT_PERM
                 | ffi::ARCHIVE_EXTRACT_ACL
@@ -810,6 +815,36 @@ unsafe extern "C" fn libarchive_seek_callback(
         Ok(offset) => offset as i64,
         Err(_) => -1,
     }
+}
+
+unsafe extern "C" fn libarchive_skip_callback(
+    _: *mut ffi::archive,
+    client_data: *mut c_void,
+    request: ffi::la_int64_t,
+) -> ffi::la_int64_t {
+    let pipe = (client_data as *mut SeekableReaderPipe).as_mut().unwrap();
+
+    skip_by_seeking(pipe.reader, request)
+}
+
+// Seeks forward over at most `request` bytes and returns how many it
+// skipped, as libarchive's skip callback must. It never seeks past the end:
+// libarchive reads what it could not skip, and only a read at the end tells
+// it that the archive is truncated. On any error it returns 0, which makes
+// libarchive read and discard the bytes instead.
+pub(crate) fn skip_by_seeking<S: Seek + ?Sized>(reader: &mut S, request: i64) -> i64 {
+    let mut skip = || -> io::Result<u64> {
+        let start = reader.stream_position()?;
+        let end = reader.seek(SeekFrom::End(0))?;
+        let target = start
+            .saturating_add(u64::try_from(request).unwrap_or(0))
+            .min(end)
+            .max(start);
+        reader.seek(SeekFrom::Start(target))?;
+        Ok(target - start)
+    };
+
+    skip().map_or(0, |skipped| skipped as i64)
 }
 
 unsafe extern "C" fn libarchive_seekable_read_callback(

@@ -13,7 +13,8 @@ use libc::stat;
 
 use crate::{
     error::archive_result, ffi, ffi::UTF8LocaleGuard, libarchive_entry_pathname,
-    libarchive_entry_stat, stat_is_dir, DecodeCallback, Error, Result, READER_BUFFER_SIZE,
+    libarchive_entry_stat, skip_by_seeking, stat_is_dir, DecodeCallback, Error, Result,
+    READER_BUFFER_SIZE,
 };
 
 struct HeapReadSeekerPipe<R: Read + Seek> {
@@ -218,6 +219,14 @@ impl<R: Read + Seek> ArchiveIterator<R> {
                     ffi::archive_read_set_seek_callback(
                         archive_reader,
                         Some(libarchive_heap_seek_callback::<R>),
+                    ),
+                    archive_reader,
+                )?;
+
+                archive_result(
+                    ffi::archive_read_set_skip_callback(
+                        archive_reader,
+                        Some(libarchive_heap_skip_callback::<R>),
                     ),
                     archive_reader,
                 )?;
@@ -477,6 +486,18 @@ unsafe extern "C" fn libarchive_heap_seek_callback<R: Read + Seek>(
         Ok(offset) => offset as i64,
         Err(_) => -1,
     }
+}
+
+unsafe extern "C" fn libarchive_heap_skip_callback<R: Read + Seek>(
+    _: *mut ffi::archive,
+    client_data: *mut c_void,
+    request: ffi::la_int64_t,
+) -> ffi::la_int64_t {
+    let pipe = (client_data as *mut HeapReadSeekerPipe<R>)
+        .as_mut()
+        .unwrap();
+
+    skip_by_seeking(&mut pipe.reader, request)
 }
 
 unsafe extern "C" fn libarchive_heap_seekableread_callback<R: Read + Seek>(

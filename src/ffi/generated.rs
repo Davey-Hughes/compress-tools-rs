@@ -47,6 +47,13 @@ pub(crate) type archive_read_callback = ::std::option::Option<
         _buffer: *mut *const ::std::os::raw::c_void,
     ) -> la_ssize_t,
 >;
+pub(crate) type archive_skip_callback = ::std::option::Option<
+    unsafe extern "C" fn(
+        arg1: *mut archive,
+        _client_data: *mut ::std::os::raw::c_void,
+        request: la_int64_t,
+    ) -> la_int64_t,
+>;
 pub(crate) type archive_seek_callback = ::std::option::Option<
     unsafe extern "C" fn(
         arg1: *mut archive,
@@ -83,6 +90,12 @@ extern "C" {
     pub(crate) fn archive_read_set_seek_callback(
         arg1: *mut archive,
         arg2: archive_seek_callback,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub(crate) fn archive_read_set_skip_callback(
+        arg1: *mut archive,
+        arg2: archive_skip_callback,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {

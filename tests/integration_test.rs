@@ -6,7 +6,7 @@ use compress_tools::*;
 use libc::S_IFREG;
 use std::{
     ffi::OsStr,
-    io::{Cursor, ErrorKind, Read},
+    io::{Cursor, ErrorKind, Read, Seek, SeekFrom},
     path::Path,
 };
 
@@ -722,6 +722,123 @@ fn rar4_unicode_names_child() {
     for name in RAR4_UNICODE_NAMES {
         assert!(dir.path().join(name).exists(), "{} was not extracted", name);
     }
+}
+
+/// Counts the bytes read through it.
+struct CountingReader<R> {
+    inner: R,
+    bytes_read: u64,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes_read += n as u64;
+        Ok(n)
+    }
+}
+
+impl<R: Seek> Seek for CountingReader<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+// Six stored entries of 48 KiB (`rar a -ma5 -m0`). Without a skip callback
+// libarchive reads and discards a skipped entry unless more than 64 KiB of it
+// remain, so reading the last entry would read the five before it in full.
+const RAR5_STORED: &str = "tests/fixtures/rar5-stored.rar";
+
+fn rar5_stored_entries() -> (ArchiveEntryInfo, u64) {
+    let mut entries = list_archive_entries(std::fs::File::open(RAR5_STORED).unwrap())
+        .expect("Failed to list the archive");
+    let last = entries.pop().unwrap();
+    let before = entries.iter().map(|entry| entry.size).sum();
+    (last, before)
+}
+
+fn rar5_stored_content(n: usize, size: u64) -> Vec<u8> {
+    (0..size as usize)
+        .map(|i| ((i + 31 * n) % 251) as u8)
+        .collect()
+}
+
+#[test]
+fn uncompress_archive_file_seeks_over_skipped_entries() {
+    let (last, before) = rar5_stored_entries();
+    let mut source = CountingReader {
+        inner: std::fs::File::open(RAR5_STORED).unwrap(),
+        bytes_read: 0,
+    };
+
+    let mut target = Vec::default();
+    uncompress_archive_file(&mut source, &mut target, &last.path).expect("Failed to get the file");
+
+    assert!(
+        target == rar5_stored_content(6, last.size),
+        "{} did not match",
+        last.path
+    );
+    assert!(
+        source.bytes_read < before,
+        "read {} bytes to get {}, but the entries before it hold only {}",
+        source.bytes_read,
+        last.path,
+        before,
+    );
+}
+
+#[test]
+fn iterator_seeks_over_filtered_entries() {
+    let (last, before) = rar5_stored_entries();
+    let mut source = CountingReader {
+        inner: std::fs::File::open(RAR5_STORED).unwrap(),
+        bytes_read: 0,
+    };
+
+    let wanted = last.path.clone();
+    let mut target = Vec::default();
+    for content in ArchiveIteratorBuilder::new(&mut source)
+        .filter(move |name, _| name == wanted)
+        .build()
+        .expect("Failed to read archive")
+    {
+        match content {
+            ArchiveContents::StartOfEntry(name, _) => assert_eq!(name, last.path),
+            ArchiveContents::DataChunk(chunk) => target.extend_from_slice(&chunk),
+            ArchiveContents::EndOfEntry => {}
+            ArchiveContents::Err(e) => panic!("{:?}", e),
+        }
+    }
+
+    assert!(
+        target == rar5_stored_content(6, last.size),
+        "{} did not match",
+        last.path
+    );
+    assert!(
+        source.bytes_read < before,
+        "read {} bytes to get {}, but the entries before it hold only {}",
+        source.bytes_read,
+        last.path,
+        before,
+    );
+}
+
+#[test]
+fn skipping_past_the_end_of_a_truncated_archive_is_an_error() {
+    let mut data = std::fs::read(RAR5_STORED).unwrap();
+    // Cut the archive inside its third entry, so that skipping it runs off
+    // the end.
+    data.truncate(120_000);
+
+    let mut target = Vec::default();
+    let err = uncompress_archive_file(Cursor::new(data), &mut target, "06.bin").unwrap_err();
+    assert!(
+        matches!(err, Error::Extraction { ref details, .. } if details.starts_with("Truncated input file")),
+        "{:?}",
+        err
+    );
 }
 
 #[test]

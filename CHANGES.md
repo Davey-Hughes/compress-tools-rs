@@ -4,6 +4,10 @@
 
 ## [Unreleased] - ReleaseDate
 
+* Register a skip callback, so libarchive seeks over the data of an entry it
+  skips instead of reading it: `uncompress_archive_file` and a filtered
+  `ArchiveIterator` no longer read every entry before the one wanted when
+  those entries are smaller than about 80 KiB
 * Return an error from `ArchiveIterator` for an entry libarchive gives no
   pathname, as the listing and extraction functions already did ("archive
   entry has unreadable filename."), instead of passing NULL to
