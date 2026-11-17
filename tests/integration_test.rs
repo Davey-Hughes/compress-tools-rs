@@ -659,6 +659,71 @@ fn uncompress_rar_to_dir() {
     );
 }
 
+fn run_ignored_test_in_child(name: &str) {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args([name, "--exact", "--ignored", "--test-threads=1"]);
+    for (key, _) in std::env::vars_os() {
+        if key == "LANG" || key == "LANGUAGE" || key.to_string_lossy().starts_with("LC_") {
+            command.env_remove(key);
+        }
+    }
+    command.env("LC_ALL", "C");
+
+    let output = command.output().expect("Failed to run the test binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+        "{} did not pass in a child process ({}):\n{}\n{}",
+        name,
+        output.status,
+        stdout,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+const RAR4_UNICODE_NAMES: [&str; 3] = ["plain.txt", "café.txt", "ページ.txt"];
+
+/// RAR4 stores a non-ASCII name as UTF-16, which libarchive cannot convert
+/// to the C locale's charset.
+#[test]
+fn rar4_unicode_names_under_c_locale() {
+    run_ignored_test_in_child("rar4_unicode_names_child");
+}
+
+#[test]
+#[ignore = "run by rar4_unicode_names_under_c_locale under the C locale"]
+fn rar4_unicode_names_child() {
+    let path = "tests/fixtures/rar4-unicode-names.rar";
+
+    let files =
+        list_archive_files(std::fs::File::open(path).unwrap()).expect("Failed to list the archive");
+    assert_eq!(files, RAR4_UNICODE_NAMES);
+
+    let names =
+        collect_iterate_names_with_encoding(std::fs::File::open(path).unwrap(), decode_utf8);
+    assert_eq!(names, RAR4_UNICODE_NAMES);
+
+    let mut target = Vec::default();
+    uncompress_archive_file(
+        std::fs::File::open(path).unwrap(),
+        &mut target,
+        "ページ.txt",
+    )
+    .expect("Failed to get the file");
+    assert_eq!(String::from_utf8_lossy(&target), "ページ\n");
+
+    let dir = tempfile::TempDir::new().expect("Failed to create the tmp directory");
+    uncompress_archive(
+        std::fs::File::open(path).unwrap(),
+        dir.path(),
+        Ownership::Ignore,
+    )
+    .expect("Failed to uncompress the file");
+    for name in RAR4_UNICODE_NAMES {
+        assert!(dir.path().join(name).exists(), "{} was not extracted", name);
+    }
+}
+
 #[test]
 fn uncompress_to_dir_with_utf8_pathname() {
     let dir = tempfile::TempDir::new().expect("Failed to create the tmp directory");

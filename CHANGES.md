@@ -4,6 +4,12 @@
 
 ## [Unreleased] - ReleaseDate
 
+* Read entry names under a UTF-8 locale (`C.UTF-8`, else `C.utf8`) rather
+  than the environment's, so names that libarchive converts (RAR UTF-16
+  names, ZIP names flagged UTF-8) are no longer lost under `LC_ALL=C` or
+  where no locale is set. Under a non-UTF-8 environment locale such names now
+  come out in UTF-8 instead of that locale's charset; names stored without a
+  charset are passed through unchanged, as before
 * build: link `bcrypt` on MSVC targets, as libarchive 3.8.8 calls
   `BCryptGenRandom` and static builds (`x64-windows-static`) failed to link
 * deps: raise the minimum versions of all dependencies to their latest

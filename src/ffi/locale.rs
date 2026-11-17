@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-/// Change from the C to system locale, allowing libarchive to handle filenames
-/// in UTF-8. We restrict to change LC_CTYPE only, since libarchive only needs
-/// the charset set. The timing of locale setting for Unix and Windows is
-/// different, handle them separately.
+/// Switch the calling thread to a UTF-8 locale, so libarchive hands out
+/// filenames in UTF-8 whatever locale the environment sets. We restrict to
+/// change LC_CTYPE only, since libarchive only needs the charset set. The
+/// timing of locale setting for Unix and Windows is different, handle them
+/// separately.
 ///
 /// See on libarchive Website for a more complete description of the issue:
 ///
@@ -25,19 +26,27 @@ mod inner {
 
     impl UTF8LocaleGuard {
         pub(crate) fn new() -> Self {
+            // libarchive converts a name stored in another charset (a RAR
+            // UTF-16 name, a ZIP name flagged UTF-8) into the thread's
+            // charset, and gives no name when it cannot. "" is C under
+            // `LC_ALL=C` or with no locale set, so ask for UTF-8 by name first.
             #[cfg(any(target_os = "linux", target_os = "illumos"))]
-            let locale = b"\0";
+            const LOCALES: &[&[u8]] = &[b"C.UTF-8\0", b"C.utf8\0", b"\0"];
 
             #[cfg(target_os = "macos")]
-            let locale = b"UTF-8\0";
+            const LOCALES: &[&[u8]] = &[b"UTF-8\0"];
 
-            let utf8_locale = unsafe {
-                libc::newlocale(
-                    libc::LC_CTYPE_MASK,
-                    locale.as_ptr() as *const libc::c_char,
-                    std::ptr::null_mut(),
-                )
-            };
+            let utf8_locale = LOCALES
+                .iter()
+                .map(|locale| unsafe {
+                    libc::newlocale(
+                        libc::LC_CTYPE_MASK,
+                        locale.as_ptr() as *const libc::c_char,
+                        std::ptr::null_mut(),
+                    )
+                })
+                .find(|locale| !locale.is_null())
+                .unwrap_or(std::ptr::null_mut());
 
             let save = if utf8_locale.is_null() {
                 std::ptr::null_mut()
