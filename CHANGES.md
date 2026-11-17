@@ -4,6 +4,11 @@
 
 ## [Unreleased] - ReleaseDate
 
+* Return an error from `ArchiveIterator` for an entry libarchive gives no
+  pathname, as the listing and extraction functions already did ("archive
+  entry has unreadable filename."), instead of passing NULL to
+  `CStr::from_ptr` and crashing. A NULL from `archive_entry_stat` is now an
+  error too
 * Read entry names under a UTF-8 locale (`C.UTF-8`, else `C.utf8`) rather
   than the environment's, so names that libarchive converts (RAR UTF-16
   names, ZIP names flagged UTF-8) are no longer lost under `LC_ALL=C` or

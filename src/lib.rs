@@ -246,7 +246,7 @@ where
                 let _utf8_guard = ffi::WindowsUTF8LocaleGuard::new();
                 let cstr = libarchive_entry_pathname(entry)?;
                 let path = decode(cstr.to_bytes())?;
-                let size = libarchive_entry_size(entry);
+                let size = libarchive_entry_size(entry)?;
                 entries.push(ArchiveEntryInfo { path, size });
             }
         },
@@ -396,7 +396,7 @@ where
                     ffi::archive_write_header(archive_writer, entry),
                     archive_writer,
                 )?;
-                if !libarchive_entry_is_dir(entry) {
+                if !libarchive_entry_is_dir(entry)? {
                     libarchive_copy_data(archive_reader, archive_writer)?;
                 }
 
@@ -488,7 +488,7 @@ where
                 }
             }
 
-            if libarchive_entry_is_dir(entry) {
+            if libarchive_entry_is_dir(entry)? {
                 return Ok(0);
             }
             libarchive_write_data_block(archive_reader, target)
@@ -712,23 +712,46 @@ fn libarchive_copy_data(
     }
 }
 
-fn libarchive_entry_size(entry: *mut ffi::archive_entry) -> u64 {
+// `archive_entry_stat` returns NULL when it cannot allocate the `stat` it
+// fills in.
+pub(crate) fn libarchive_entry_stat(entry: *mut ffi::archive_entry) -> Result<stat> {
+    let stat = unsafe { ffi::archive_entry_stat(entry) };
+    if stat.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "cannot allocate the archive entry's stat.".to_string(),
+        )
+        .into());
+    }
+
+    Ok(unsafe { *stat })
+}
+
+fn libarchive_entry_size(entry: *mut ffi::archive_entry) -> Result<u64> {
     // `st_size` is `i32` on Windows (see the `stat` struct above) and `i64`
     // on Unix. Widen through `i64` to keep the cast platform-agnostic.
-    let size = unsafe { (*ffi::archive_entry_stat(entry)).st_size } as i64;
-    size.max(0) as u64
+    let size = libarchive_entry_stat(entry)?.st_size as i64;
+    Ok(size.max(0) as u64)
 }
 
 // Raw POSIX mode bits: `libc::S_IFDIR` is not exposed on Windows, where our
-// `stat` mirrors libarchive's own layout.
-pub(crate) fn libarchive_entry_is_dir(entry: *mut ffi::archive_entry) -> bool {
+// `stat` mirrors libarchive's own layout and `st_mode` is `u16`, so the
+// cast is only a no-op on Unix.
+#[allow(clippy::unnecessary_cast)]
+pub(crate) fn stat_is_dir(stat: &stat) -> bool {
     const S_IFMT: u32 = 0o170000;
     const S_IFDIR: u32 = 0o040000;
-    let mode = unsafe { (*ffi::archive_entry_stat(entry)).st_mode } as u32;
-    (mode & S_IFMT) == S_IFDIR
+    (stat.st_mode as u32 & S_IFMT) == S_IFDIR
 }
 
-fn libarchive_entry_pathname<'a>(entry: *mut ffi::archive_entry) -> Result<&'a CStr> {
+fn libarchive_entry_is_dir(entry: *mut ffi::archive_entry) -> Result<bool> {
+    Ok(stat_is_dir(&libarchive_entry_stat(entry)?))
+}
+
+// libarchive gives no pathname for an entry whose name it could not convert
+// to the current locale's charset (it returns `ARCHIVE_WARN` for the
+// header).
+pub(crate) fn libarchive_entry_pathname<'a>(entry: *mut ffi::archive_entry) -> Result<&'a CStr> {
     let pathname = unsafe { ffi::archive_entry_pathname(entry) };
     if pathname.is_null() {
         return Err(io::Error::new(

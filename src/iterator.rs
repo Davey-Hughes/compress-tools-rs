@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, CString},
+    ffi::CString,
     io::{Read, Seek, SeekFrom, Write},
     slice,
 };
@@ -12,8 +12,8 @@ use crate::stat;
 use libc::stat;
 
 use crate::{
-    error::archive_result, ffi, ffi::UTF8LocaleGuard, libarchive_entry_is_dir, DecodeCallback,
-    Error, Result, READER_BUFFER_SIZE,
+    error::archive_result, ffi, ffi::UTF8LocaleGuard, libarchive_entry_pathname,
+    libarchive_entry_stat, stat_is_dir, DecodeCallback, Error, Result, READER_BUFFER_SIZE,
 };
 
 struct HeapReadSeekerPipe<R: Read + Seek> {
@@ -389,13 +389,19 @@ impl<R: Read + Seek> ArchiveIterator<R> {
                     }
                 }
                 let _utf8_guard = ffi::WindowsUTF8LocaleGuard::new();
-                let cstr = CStr::from_ptr(ffi::archive_entry_pathname(self.archive_entry));
+                let cstr = match libarchive_entry_pathname(self.archive_entry) {
+                    Ok(c) => c,
+                    Err(e) => return ArchiveContents::Err(e),
+                };
                 let file_name = match (self.decode)(cstr.to_bytes()) {
                     Ok(f) => f,
                     Err(e) => return ArchiveContents::Err(e),
                 };
-                let stat = *ffi::archive_entry_stat(self.archive_entry);
-                self.current_is_dir = libarchive_entry_is_dir(self.archive_entry);
+                let stat = match libarchive_entry_stat(self.archive_entry) {
+                    Ok(s) => s,
+                    Err(e) => return ArchiveContents::Err(e),
+                };
+                self.current_is_dir = stat_is_dir(&stat);
                 ArchiveContents::StartOfEntry(file_name, stat)
             }
             _ => ArchiveContents::Err(Error::from(self.archive_reader)),

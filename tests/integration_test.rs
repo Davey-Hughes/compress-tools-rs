@@ -1223,6 +1223,62 @@ fn decode_chinese_zip() {
     assert_eq!(files, expected);
 }
 
+/// libarchive gives no pathname for an entry whose name it cannot convert,
+/// here a ZIP name flagged UTF-8 that is not UTF-8. The child process keeps
+/// a crash from taking the whole test binary down.
+#[test]
+fn unconvertible_name_is_an_error() {
+    run_ignored_test_in_child("unconvertible_name_child");
+}
+
+#[test]
+#[ignore = "run by unconvertible_name_is_an_error in a child process"]
+fn unconvertible_name_child() {
+    let path = "tests/fixtures/invalid-utf8-name.zip";
+    let unreadable = "archive entry has unreadable filename.";
+
+    let err = list_archive_files(std::fs::File::open(path).unwrap()).unwrap_err();
+    assert_eq!(err.to_string(), unreadable);
+
+    let mut target = Vec::default();
+    let err = uncompress_archive_file(std::fs::File::open(path).unwrap(), &mut target, "missing")
+        .unwrap_err();
+    assert_eq!(err.to_string(), unreadable);
+
+    let dir = tempfile::TempDir::new().expect("Failed to create the tmp directory");
+    let err = uncompress_archive(
+        std::fs::File::open(path).unwrap(),
+        dir.path(),
+        Ownership::Ignore,
+    )
+    .unwrap_err();
+    assert_eq!(err.to_string(), unreadable);
+
+    let mut events = Vec::new();
+    let mut data = Vec::new();
+    for content in ArchiveIterator::from_read(std::fs::File::open(path).unwrap())
+        .expect("Failed to read archive")
+    {
+        match content {
+            ArchiveContents::StartOfEntry(name, _) => events.push(format!("start {}", name)),
+            ArchiveContents::DataChunk(chunk) => data.extend_from_slice(&chunk),
+            ArchiveContents::EndOfEntry => {
+                events.push(format!("end {}", String::from_utf8_lossy(&data)));
+                data.clear();
+            }
+            ArchiveContents::Err(e) => events.push(format!("error {}", e)),
+        }
+    }
+    assert_eq!(
+        events,
+        [
+            "start good.txt".to_string(),
+            "end good\n".to_string(),
+            format!("error {}", unreadable),
+        ]
+    );
+}
+
 #[test]
 fn iterate_archive_with_filter_name() {
     let source = std::fs::File::open("tests/fixtures/tree.tar").unwrap();
